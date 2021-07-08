@@ -106,3 +106,193 @@ test("Error", () => {
   const pipeline = RTL.init();
   expect(() => RTL.mapRequest(template)(pipeline)).toThrow();
 });
+
+test("Quiet Reference", () => {
+  const template = `
+    {
+      #set($myValue = 5)
+      "first": "$myValue",
+      "second": "$somethingelse",
+      "third": "$!{somethingelse}"
+    }
+  `;
+  const state = RTL.chain(RTL.init(), RTL.mapRequest(template));
+
+  expect(JSON.parse(state.render)).toEqual({
+    first: "5",
+    // literal because undefined
+    second: "$somethingelse",
+    // empty because quiet reference syntax above
+    third: "",
+  });
+});
+
+describe("AWS's own examples", () => {
+  test("dynamodb GetItem", () => {
+    const template = `
+      {
+        "version" : "2017-02-28",
+        "operation" : "GetItem",
+        "key" : {
+            "foo" : $util.dynamodb.toDynamoDBJson($ctx.arguments.foo),
+            "bar" : $util.dynamodb.toDynamoDBJson($ctx.arguments.bar)
+        },
+        "consistentRead" : true
+      }
+    `;
+
+    const state = RTL.chain(
+      RTL.init(),
+      RTL.setArguments({
+        foo: "FOO",
+        bar: "BAR",
+      }),
+      RTL.mapRequest(template)
+    );
+
+    expect(JSON.parse(state.render)).toMatchObject({
+      version: "2017-02-28",
+      operation: "GetItem",
+      key: {
+        foo: { S: "FOO" },
+        bar: { S: "BAR" },
+      },
+      consistentRead: true,
+    });
+  });
+
+  test("DynamoDB Update Item", () => {
+    const template = `
+      {
+        "version" : "2017-02-28",
+        "operation" : "UpdateItem",
+        "key" : {
+          "id" : $util.dynamodb.toDynamoDBJson($ctx.args.id)
+        },
+
+        ## Set up some space to keep track of things we're updating **
+        #set( $expNames  = {} )
+        #set( $expValues = {} )
+        #set( $expSet = {} )
+        #set( $expAdd = {} )
+        #set( $expRemove = [] )
+
+        ## Increment "version" by 1 **
+        $util.qr($expAdd.put("version", ":newVersion"))
+        $util.qr($expValues.put(":newVersion", { "N" : 1 }))
+
+        ## Iterate through each argument, skipping "id" and "expectedVersion" **
+        #foreach( $entry in $context.arguments.entrySet() )
+          #if( $entry.key != "id" && $entry.key != "expectedVersion" )
+            #if( (!$entry.value) )
+              ## If the argument is set to "null", then remove that attribute from the item in DynamoDB **
+              $utils.qr($expRemove.add("#\${entry.key}") )
+              $utils.qr($expNames.put("#\${entry.key}", "$entry.key"))
+            #else
+              ## Otherwise set (or update) the attribute on the item in DynamoDB **
+
+              $utils.qr($expSet.put("#\${entry.key}", ":\${entry.key}"))
+              $utils.qr($expNames.put("#\${entry.key}", "$entry.key"))
+
+              #if( $entry.key == "ups" || $entry.key == "downs" )
+                $utils.qr($expValues.put(":\${entry.key}", { "N" : $entry.value }))
+              #else
+                $utils.qr($expValues.put(":\${entry.key}", { "S" : "\${entry.value}" }))
+              #end
+            #end
+          #end
+        #end
+
+        ## Start building the update expression, starting with attributes we're going to SET **
+        #set( $expression = "" )
+        #if( !\${expSet.isEmpty()} )
+          #set( $expression = "SET" )
+          #foreach( $entry in $expSet.entrySet() )
+            #set( $expression = "\${expression} \${entry.key} = \${entry.value}" )
+            #if ( $foreach.hasNext )
+              #set( $expression = "\${expression}," )
+            #end
+          #end
+        #end
+
+        ## Continue building the update expression, adding attributes we're going to ADD **
+        #if( !\${expAdd.isEmpty()} )
+          #set( $expression = "\${expression} ADD" )
+          #foreach( $entry in $expAdd.entrySet() )
+            #set( $expression = "\${expression} \${entry.key} \${entry.value}" )
+            #if ( $foreach.hasNext )
+              #set( $expression = "\${expression}," )
+            #end
+          #end
+        #end
+
+        ## Continue building the update expression, adding attributes we're going to REMOVE **
+        #if( !\${expRemove.isEmpty()} )
+          #set( $expression = "\${expression} REMOVE" )
+
+          #foreach( $entry in $expRemove )
+            #set( $expression = "\${expression} \${entry}" )
+            #if ( $foreach.hasNext )
+              #set( $expression = "\${expression}," )
+            #end
+          #end
+        #end
+
+        ## Finally, write the update expression into the document, along with any expressionNames and expressionValues **
+        "update" : {
+          "expression" : "\${expression}"
+          #if( !\${expNames.isEmpty()} )
+            ,"expressionNames" : $utils.toJson($expNames)
+          #end
+          #if( !\${expValues.isEmpty()} )
+            ,"expressionValues" : $utils.toJson($expValues)
+          #end
+        },
+
+        "condition" : {
+          "expression"       : "version = :expectedVersion",
+          "expressionValues" : {
+            ":expectedVersion" : $util.dynamodb.toDynamoDBJson($ctx.args.expectedVersion)
+          }
+        }
+      }
+    `;
+
+    const state = RTL.chain(
+      RTL.init(),
+      RTL.setArguments({
+        id: "abcdefgh-ijkl-mnop",
+        title: "Test",
+        author: null,
+        expectedVersion: 1,
+      }),
+      RTL.mapRequest(template)
+    );
+
+    expect(JSON.parse(state.render)).toMatchObject({
+      version: "2017-02-28",
+      update: {
+        expression:
+          "SET #title = :title ADD version :newVersion REMOVE #author",
+        expressionNames: {
+          "#title": "title",
+          "#author": "author",
+        },
+        expressionValues: {
+          ":newVersion": {
+            N: 1,
+          },
+          ":title": {
+            S: "Test",
+          },
+        },
+      },
+      condition: {
+        expression: "version = :expectedVersion",
+        expressionValues: {
+          ":expectedVersion": { N: "1" },
+        },
+      },
+    });
+  });
+});

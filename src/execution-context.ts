@@ -33,7 +33,7 @@ export const make = (
       throw err;
     },
   };
-  const context = state.context;
+  const context = { ...state.context, args: state.context.arguments };
 
   return {
     context,
