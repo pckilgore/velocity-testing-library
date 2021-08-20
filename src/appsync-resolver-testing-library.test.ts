@@ -38,17 +38,30 @@ test("utils.toJson", () => {
    $util.toJson($myMap)
   `;
   const state = RTL.chain(RTL.init(), RTL.mapRequest(template));
-  expect(state.render?.trim()).toBe(JSON.stringify({ id: "first value" }));
+  const want = JSON.stringify({ id: "first value" });
+
+  expect(state.render?.trim()).toBe(want);
 });
 
-test("utils.toJson", () => {
+test("utils.toJson nested array", () => {
   const template = `
      #set($myMap = {})
+     #set($myOtherMap = { "a": [1,2,3,4] })
      $util.quiet($myMap.put("id", "first value"))
+     $util.quiet($myOtherMap.put("subField", 1))
+     $util.quiet($myMap.put("field", $myOtherMap))
      $util.toJson($myMap)
   `;
   const state = RTL.chain(RTL.init(), RTL.mapRequest(template));
-  expect(state.render?.trim()).toBe(JSON.stringify({ id: "first value" }));
+  const got = JSON.parse(state.render?.trim());
+  const want = {
+    id: "first value",
+    field: {
+      a: [1, 2, 3, 4],
+      subField: 1,
+    },
+  };
+  expect(got).toMatchObject(want);
 });
 
 test("read arguments", () => {
@@ -62,7 +75,10 @@ test("read arguments", () => {
     RTL.setArguments({ id: "abc123" }),
     RTL.mapRequest(template)
   );
-  expect(state.render?.trim()).toBe(JSON.stringify({ id: "abc123" }));
+  const got = JSON.parse(state.render);
+  const want = { id: "abc123" };
+
+  expect(got).toMatchObject(want);
 });
 
 test("shortcut setter", () => {
@@ -96,7 +112,10 @@ test("shortcut setter", () => {
     RTL.setArguments({ id: "abc123" }),
     RTL.mapRequest(template)
   );
-  expect(state.render?.trim()).toBe(JSON.stringify(post));
+
+  const got = JSON.parse(state.render);
+
+  expect(got).toMatchObject(post);
 });
 
 test("Error", () => {
