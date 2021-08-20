@@ -1,6 +1,7 @@
 {
-  "name": "appsync-resolver-testing-library",
-  "version": "1.0.0",
+  "name": "velocity-testing-library",
+  "description": "Test AppSync resolvers",
+  "version": "0.1.0",
   "main": "index.js",
   "license": "MIT",
   "scripts": {
